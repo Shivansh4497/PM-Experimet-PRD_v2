@@ -1,0 +1,200 @@
+[
+  {
+    "id": "growth-01",
+    "domain": "Growth",
+    "title": "Reduce onboarding steps to increase activation rate",
+    "business_context": "New users drop off heavily during the onboarding funnel, leading to lower activation rates and fewer users reaching meaningful first actions.",
+    "problem_statement": "Current onboarding flow has 6 steps and a 40% drop-off at step 3. Activation (users completing first meaningful action) is only 22%. We believe complexity is the primary barrier.",
+    "hypothesis": "If we reduce onboarding steps from 6 to 3 and auto-fill known information, activation rate will increase by 25% because users face less friction.",
+    "success_metrics": [
+      "North Star: Activation rate (users completing key first action)",
+      "Secondary: Onboarding completion rate",
+      "Secondary: Time-to-first-action"
+    ],
+    "experiment_design": "Run a 50/50 A/B test comparing the 6-step (control) vs 3-step (variant) onboarding flow. Measure activation over 14 days post-signup, with statistical significance at 95% confidence.",
+    "implementation_plan": [
+      "Audit current onboarding flow and identify redundant fields.",
+      "Introduce progressive disclosure and auto-fill known details.",
+      "Deploy experiment via feature flag and monitor via analytics dashboard."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Reduced onboarding detail may lead to incomplete profiles.",
+        "mitigation": "Collect missing info gradually post-onboarding (soft gates)."
+      },
+      {
+        "risk": "Over-simplification could impact downstream personalization.",
+        "mitigation": "Monitor engagement metrics of new users separately."
+      }
+    ],
+    "decision_framework": "If activation rate improves by ≥20% with no significant drop in retention or engagement, roll out to 100% of new users."
+  },
+  {
+    "id": "growth-02",
+    "domain": "Growth",
+    "title": "Optimize landing page CTAs to increase signup conversion",
+    "business_context": "Our main acquisition channel drives 150K visits/month but conversion to sign-up is low (~2.8%). Users bounce early due to weak messaging hierarchy and CTA placement.",
+    "problem_statement": "Conversion rate from homepage to signup is below industry benchmarks (2.8% vs 4-6%). Heatmap analysis shows CTA below the fold, low engagement.",
+    "hypothesis": "If we move CTAs above the fold and personalize messaging by referral source, homepage-to-signup conversion will increase by 30%.",
+    "success_metrics": [
+      "North Star: Homepage to signup conversion rate",
+      "Secondary: Scroll depth engagement",
+      "Secondary: Bounce rate"
+    ],
+    "experiment_design": "Run multi-variant A/B test with 3 CTA placements and messaging variants. Segment by acquisition source (ads, organic, social). Duration: 3 weeks.",
+    "implementation_plan": [
+      "Redesign hero section with multiple CTA placements.",
+      "Add dynamic text personalization via UTM parameters.",
+      "Run experiment using growth experimentation platform."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Aggressive CTAs may reduce brand trust.",
+        "mitigation": "Use subtle design cues; test visual tone through surveys."
+      },
+      {
+        "risk": "Personalization errors for unknown sources.",
+        "mitigation": "Default to generic but tested copy."
+      }
+    ],
+    "decision_framework": "If variant increases conversion by ≥20% without significant rise in bounce rate, roll out globally."
+  },
+  {
+    "id": "growth-03",
+    "domain": "Growth",
+    "title": "Introduce referral program to drive organic acquisition",
+    "business_context": "Paid acquisition costs are rising 15% MoM. Organic growth has plateaued. A structured referral program can convert existing satisfied users into acquisition channels.",
+    "problem_statement": "CAC from paid channels has crossed $18, while referral-driven users (in ad-hoc tests) show higher retention and LTV. Currently, there’s no incentivized referral path.",
+    "hypothesis": "If we introduce a structured referral system (referrer gets $5 credit, referee gets 7-day premium trial), organic new users will increase by 20% MoM and LTV will improve by 10%.",
+    "success_metrics": [
+      "North Star: Referral-driven new user growth",
+      "Secondary: CAC reduction",
+      "Secondary: Referral user retention (D30)"
+    ],
+    "experiment_design": "Launch a referral program to 20% of existing user base. Measure referral invites, conversion rate, and quality (D30 retention).",
+    "implementation_plan": [
+      "Build referral link generator and tracking dashboard.",
+      "Automate incentive distribution.",
+      "Promote feature via in-app banners and email."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Fraudulent self-referrals or low-quality signups.",
+        "mitigation": "Limit rewards per user and flag suspicious patterns."
+      },
+      {
+        "risk": "Reward fulfillment errors.",
+        "mitigation": "Integrate QA testing for incentive distribution."
+      }
+    ],
+    "decision_framework": "Scale program if net-new users via referral ≥10% of total acquisition and cost/user < CAC_baseline."
+  },
+  {
+    "id": "growth-04",
+    "domain": "Growth",
+    "title": "Add progress indicators to boost onboarding completion",
+    "business_context": "Behavioral research shows users complete processes more often when progress is visualized. Onboarding completion has stagnated at 62%.",
+    "problem_statement": "No progress visualization in current onboarding flow. Users lack feedback on completion, leading to frustration and abandonment.",
+    "hypothesis": "If we introduce a progress bar and milestone feedback, onboarding completion will increase by 15% because users gain visibility and motivation.",
+    "success_metrics": [
+      "North Star: Onboarding completion rate",
+      "Secondary: Time to completion",
+      "Secondary: Activation rate"
+    ],
+    "experiment_design": "A/B test progress indicator (visual bar) vs. no indicator. Duration: 14 days, targeting new signups.",
+    "implementation_plan": [
+      "Add progress bar UI at top of onboarding screens.",
+      "Show celebratory message at completion.",
+      "Monitor funnel metrics and user sentiment."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Incorrect progress calculation could confuse users.",
+        "mitigation": "Double-check event triggers and progress logic."
+      }
+    ],
+    "decision_framework": "Roll out if completion improves ≥10% with no negative effect on activation or D7 retention."
+  },
+  {
+    "id": "growth-05",
+    "domain": "Growth",
+    "title": "Introduce exit-intent modals to recover drop-offs",
+    "business_context": "40% of users drop from pricing or checkout pages without converting. Exit-intent offers can reduce abandonment and boost paid conversions.",
+    "problem_statement": "High cart abandonment rate (68%) compared to benchmark (55%). No intervention exists before users exit the page.",
+    "hypothesis": "If we show an exit-intent modal offering 10% discount or reminder email capture, abandonment will reduce by 20% and conversions increase by 10%.",
+    "success_metrics": [
+      "North Star: Checkout conversion rate",
+      "Secondary: Abandonment rate",
+      "Secondary: Email capture rate"
+    ],
+    "experiment_design": "A/B test: Control (no modal) vs Variant (exit modal). Target high-intent users on pricing and checkout pages. Measure conversions over 2 weeks.",
+    "implementation_plan": [
+      "Implement exit-intent detection (mouse leave + idle timeout).",
+      "Design modal offering limited-time discount or email capture.",
+      "Measure conversions, track re-engagement via email."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Overuse of modals could annoy users.",
+        "mitigation": "Cap display frequency to once per user/session."
+      },
+      {
+        "risk": "Discount leakage to non-exiting users.",
+        "mitigation": "Restrict coupon validity."
+      }
+    ],
+    "decision_framework": "Deploy globally if conversion lift ≥8% and churn of discounted users ≤ control group."
+  },
+  {
+    "id": "growth-06",
+    "domain": "Growth",
+    "title": "Add social proof widgets to boost signup trust",
+    "business_context": "New users show hesitation on signup page; heatmaps reveal idle time near form fields. Lack of trust signals may be causing friction.",
+    "problem_statement": "Only 2.9% of visitors complete signup. Qualitative feedback indicates users doubt platform credibility.",
+    "hypothesis": "If we display dynamic social proof (e.g., ‘2,000 users signed up this week’) and trust badges, signup rate will increase by 12%.",
+    "success_metrics": [
+      "North Star: Signup conversion rate",
+      "Secondary: Form completion time",
+      "Secondary: Bounce rate"
+    ],
+    "experiment_design": "50/50 A/B test on signup page with vs without social proof widgets. Track conversion uplift and confidence intervals.",
+    "implementation_plan": [
+      "Integrate live user counter and testimonial carousel.",
+      "Add security and payment trust badges.",
+      "Validate copy through micro-surveys pre-launch."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Fake-looking counters reduce credibility.",
+        "mitigation": "Use accurate, real-time numbers with proof source."
+      }
+    ],
+    "decision_framework": "Roll out if uplift ≥10% and post-signup churn unaffected."
+  },
+  {
+    "id": "growth-07",
+    "domain": "Growth",
+    "title": "Launch in-app checklist to improve first-week engagement",
+    "business_context": "New users often miss key setup actions (profile completion, first project creation). Engagement drops after day 3, hurting retention and monetization potential.",
+    "problem_statement": "Only 38% of new users complete core setup tasks within first 3 days. No guidance or nudges exist to encourage progress.",
+    "hypothesis": "If we introduce a gamified checklist guiding first 5 actions, day-7 retention and activation will increase by 15%.",
+    "success_metrics": [
+      "North Star: D7 retention",
+      "Secondary: Checklist completion rate",
+      "Secondary: Activation rate"
+    ],
+    "experiment_design": "Roll out checklist feature to 30% of new users. Monitor engagement, retention, and activation over 2 weeks.",
+    "implementation_plan": [
+      "Design in-app checklist with progress bar and badges.",
+      "Track completion and time-to-completion metrics.",
+      "Add optional reminder notifications for incomplete tasks."
+    ],
+    "risks_and_mitigations": [
+      {
+        "risk": "Users may perceive checklist as spammy or intrusive.",
+        "mitigation": "Allow dismissal and customize frequency of reminders."
+      }
+    ],
+    "decision_framework": "Full rollout if checklist users show ≥12% higher D7 retention and ≥10% higher activation."
+  }
+]
