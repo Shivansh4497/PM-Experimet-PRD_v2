@@ -1,19 +1,14 @@
 # app.py
 """
-Streamlit front-end for the A/B Test PRD Generator (UPDATED: domain-based demo corpus + session-scoped RAG).
+Streamlit front-end for the A/B Test PRD Generator — UPDATED:
+- Adds explicit choice between: (A) Seeded demo PRDs (read-only) and (B) Upload flow (ephemeral).
+- Clear explanatory microcopy for both options.
+- Modal-like sample PRD viewer with a Close button.
+- Supports uploading .json, .txt, .pdf, .docx, .doc files for ephemeral use.
+- Preserves all previous flows and session-scoped RAG seeding behavior.
+- Defensive fallbacks if optional utilities are missing.
 
-This is a complete, drop-in replacement for app.py.
-Features added/ensured:
-- PRD Domain dropdown in Intro (e.g., Growth, Retention, Monetization, Platform, UX, Engagement, Infrastructure).
-- On domain selection, the app seeds a **session-scoped** vector store with the read-only demo PRDs from data/demo_prds.json for that domain.
-- Uploaded user PRDs are **never** added to the demo vector store. They can optionally be included **ephemerally** in the prompt (per-session, opt-in).
-- Provenance: after each RAG call the UI shows the top-k demo snippets used and labels whether ephemeral user docs were included.
-- Fully defensive: if utils.rag_prompting or external modules are missing, the app falls back to safe behaviors (local placeholders, no persistent indexing).
-- All original flows preserved: Intro -> Hypothesis -> PRD -> Calculations -> Review.
-- Compatible with optional FastAPI proxy via FASTAPI_PROXY_URL (like previous app), but will use local generate_content if proxy not configured.
-- Session-level isolation: vector stores live in st.session_state and are removed after session ends.
-
-Drop this file into your repo root and run:
+Drop this file into the repo root and run:
     streamlit run app.py
 """
 
@@ -31,7 +26,6 @@ import streamlit.components.v1 as components
 import requests
 
 # --- Try to import existing utilities gracefully ---
-# generate_content might live in api_handler or via proxy
 try:
     from api_handler import generate_content as local_generate_content
     LOCAL_GENERATE_AVAILABLE = True
@@ -39,15 +33,13 @@ except Exception:
     local_generate_content = None
     LOCAL_GENERATE_AVAILABLE = False
 
-# rag_prompting helpers (for vector store, chunking, retrieval)
 try:
-    from utils import rag_prompting  # expected functions: build_default_vector_store, docs_to_docchunks, generate_with_rag, _derive_full_text_from_prd
+    from utils import rag_prompting
     RAG_PROMPTING_AVAILABLE = True
 except Exception:
     rag_prompting = None
     RAG_PROMPTING_AVAILABLE = False
 
-# persistence + pdf generator (optional)
 try:
     from utils.persistence import save_prd as persistence_save_prd, list_prds
     PERSISTENCE_AVAILABLE = True
@@ -61,11 +53,9 @@ try:
     PDF_AVAILABLE = True
 except Exception:
     def create_pdf(prd):
-        # basic placeholder PDF bytes
         return b"%PDF-1.4\n%placeholder\n"
     PDF_AVAILABLE = False
 
-# calculations (optional)
 try:
     from calculations import calculate_sample_size_proportion, calculate_sample_size_continuous, calculate_duration
 except Exception:
@@ -104,12 +94,12 @@ def _proxy_generate(mode: str, user_inputs: Dict[str, Any], use_rag: bool = Fals
 
 # --- App config & constants ---
 st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
-DEMO_PRDS_PATH = os.environ.get("DEMO_PRDS_PATH", "data/demo_prds.json")  # ensure this file exists and contains the improved demo PRDs
+DEMO_PRDS_PATH = os.environ.get("DEMO_PRDS_PATH", "data/demo_prds.json")
 DOMAINS = ["Growth", "Retention", "Monetization", "Platform", "UX", "Engagement", "Infrastructure"]
 DEFAULT_DOMAIN = "Growth"
-TOP_K = 3  # number of demo snippets to show/use in prompt
+TOP_K = 3
 
-# --- Session state initialization ---
+# --- Session state init ---
 def _init_session_state():
     s = st.session_state
     if "stage" not in s:
@@ -125,16 +115,15 @@ def _init_session_state():
     if "demo_domain" not in s:
         s.demo_domain = DEFAULT_DOMAIN
     if "ephemeral_uploads" not in s:
-        # list of dicts: {"title":..., "text":...}
         s.ephemeral_uploads = []
     if "include_ephemeral_in_prompt" not in s:
         s.include_ephemeral_in_prompt = False
     if "vector_store" not in s:
-        s.vector_store = None  # session-scoped vector store seeded from demo PRDs
+        s.vector_store = None
     if "seeded_domain" not in s:
         s.seeded_domain = None
     if "provenance" not in s:
-        s.provenance = []  # list of retrieved snippets metadata for last generation
+        s.provenance = []
     if "hypotheses" not in s:
         s.hypotheses = {}
     if "hypotheses_selected" not in s:
@@ -143,6 +132,14 @@ def _init_session_state():
         s.saved_prd_info = None
     if "scroll_to_top" not in s:
         s.scroll_to_top = False
+    # UI states for modal / flows
+    if "show_sample_modal" not in s:
+        s.show_sample_modal = False
+    if "demo_source_choice" not in s:
+        # "seeded" or "upload"
+        s.demo_source_choice = "seeded"
+    if "uploaded_preview_open" not in s:
+        s.uploaded_preview_open = False
 
 _init_session_state()
 
@@ -163,7 +160,7 @@ def prev_stage():
 def scroll_to_top():
     components.html("<script>window.scrollTo(0,0)</script>")
 
-# --- Utility: load demo PRDs file ---
+# --- Demo PRDs loader ---
 def _load_demo_prds() -> List[Dict[str, Any]]:
     if not os.path.exists(DEMO_PRDS_PATH):
         return []
@@ -174,29 +171,18 @@ def _load_demo_prds() -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-# --- RAG: session vector store management ---
+# --- Session vector store management (same as before) ---
 def _build_session_vector_store(use_chroma: bool = False, embedder_model: str = "all-MiniLM-L6-v2"):
-    """
-    Build a session-scoped vector store. Prefer utils.rag_prompting if available.
-    The returned object should implement:
-      - add_documents(doc_chunks)
-      - similarity_search(query, k=TOP_K) -> list of (chunk_text, meta)
-    If rag_prompting is not available, return a simple in-memory lexical fallback.
-    """
     if RAG_PROMPTING_AVAILABLE:
         try:
             vs = rag_prompting.build_default_vector_store(persist_dir=None, use_chroma=False, embedder_model=embedder_model)
             return vs
         except Exception:
-            # fallback to in-memory wrapper below
             pass
-
-    # Fallback simple in-memory store with naive embedding: store chunks and do substring/word-overlap scoring
     class SimpleInMemoryVS:
         def __init__(self):
-            self.chunks = []  # each: {"id": id, "text": text, "meta": meta}
+            self.chunks = []
         def add_documents(self, doc_chunks: List[Any]):
-            # accept either rag_prompting-like DocChunk or simple dict with 'text' and 'meta'
             for c in doc_chunks:
                 try:
                     text = c.text if hasattr(c, "text") else c.get("text", str(c))
@@ -208,7 +194,6 @@ def _build_session_vector_store(use_chroma: bool = False, embedder_model: str = 
                     cid = str(len(self.chunks))
                 self.chunks.append({"id": cid, "text": text, "meta": meta})
         def similarity_search(self, query: str, k: int = TOP_K):
-            # very naive scoring: count overlap of words
             qwords = set([w.lower() for w in query.split()])
             scored = []
             for c in self.chunks:
@@ -221,20 +206,14 @@ def _build_session_vector_store(use_chroma: bool = False, embedder_model: str = 
     return SimpleInMemoryVS()
 
 def _prepare_docchunks_from_demo_prds(docs: List[Dict[str, Any]]) -> List[Any]:
-    """
-    Convert each demo PRD into doc chunks. Prefer rag_prompting.docs_to_docchunks if available.
-    Each chunk should ideally contain text and meta: {'text':..., 'meta': {'title':..., 'source_id':...}}
-    """
     chunks = []
     if RAG_PROMPTING_AVAILABLE and hasattr(rag_prompting, "docs_to_docchunks"):
         for d in docs:
-            source_id = d.get("id") or d.get("title", "")[:32]
-            title = d.get("title", "")
-            # derive full text if utility exists; else serialize key fields
+            source_id = d.get("id") or d.get("title","")[:32]
+            title = d.get("title","")
             if hasattr(rag_prompting, "_derive_full_text_from_prd"):
                 text = rag_prompting._derive_full_text_from_prd(d)
             else:
-                # Compose a readable text blob
                 parts = []
                 if d.get("business_context"):
                     parts.append(d["business_context"])
@@ -244,18 +223,15 @@ def _prepare_docchunks_from_demo_prds(docs: List[Dict[str, Any]]) -> List[Any]:
                     parts.append("Hypothesis: " + (d["hypothesis"] if isinstance(d["hypothesis"], str) else d["hypothesis"].get("Statement","")))
                 parts.append("Implementation: " + " ".join(d.get("implementation_plan", d.get("prd_sections", {}).get("Implementation_Plan", [])) if isinstance(d.get("implementation_plan", []), list) else [d.get("implementation_plan","")]))
                 text = "\n\n".join(parts)
-            # use rag_prompting.docs_to_docchunks to create smaller chunks if available
             try:
                 c = rag_prompting.docs_to_docchunks(source_id=source_id, title=title, text=text)
                 chunks.extend(c)
             except Exception:
-                # fallback: single chunk dict
                 chunks.append({"id": source_id + "_0", "text": text, "meta": {"title": title, "source_id": source_id}})
     else:
-        # simple chunking: create one chunk per PRD from key fields
         for d in docs:
             source_id = d.get("id") or d.get("title","")[:32]
-            title = d.get("title", "")
+            title = d.get("title","")
             text = []
             for fld in ("business_context", "problem_statement", "hypothesis", "implementation_plan"):
                 if fld in d:
@@ -269,56 +245,37 @@ def _prepare_docchunks_from_demo_prds(docs: List[Dict[str, Any]]) -> List[Any]:
     return chunks
 
 def seed_session_vector_store_for_domain(domain: str):
-    """
-    Seed st.session_state.vector_store with demo PRDs for the selected domain.
-    This is session-scoped and read-only (users cannot alter the demo corpus).
-    """
     domain = domain or DEFAULT_DOMAIN
     if st.session_state.seeded_domain == domain and st.session_state.vector_store is not None:
-        return  # already seeded
+        return
     demo_docs = _load_demo_prds()
     domain_docs = [d for d in demo_docs if d.get("domain") == domain]
-    if not domain_docs:
-        # nothing to seed: set empty vector store
-        st.session_state.vector_store = _build_session_vector_store()
-        st.session_state.seeded_domain = domain
-        return
     vs = _build_session_vector_store()
-    chunks = _prepare_docchunks_from_demo_prds(domain_docs)
-    try:
-        vs.add_documents(chunks)
-    except Exception:
-        # attempt to normalize and add
-        normalized = []
-        for c in chunks:
-            try:
-                text = c.text if hasattr(c, "text") else c.get("text", str(c))
-                meta = c.meta if hasattr(c, "meta") else c.get("meta", {})
-                normalized.append({"text": text, "meta": meta, "id": getattr(c, "id", meta.get("source_id"))})
-            except Exception:
-                normalized.append({"text": str(c), "meta": {}, "id": str(time.time())})
+    if domain_docs:
+        chunks = _prepare_docchunks_from_demo_prds(domain_docs)
         try:
-            vs.add_documents(normalized)
+            vs.add_documents(chunks)
         except Exception:
-            # swallow; vector store may be minimal
-            pass
+            normalized = []
+            for c in chunks:
+                try:
+                    text = c.text if hasattr(c, "text") else c.get("text", str(c))
+                    meta = c.meta if hasattr(c, "meta") else c.get("meta", {})
+                    normalized.append({"text": text, "meta": meta, "id": getattr(c, "id", meta.get("source_id"))})
+                except Exception:
+                    normalized.append({"text": str(c), "meta": {}, "id": str(time.time())})
+            try:
+                vs.add_documents(normalized)
+            except Exception:
+                pass
     st.session_state.vector_store = vs
     st.session_state.seeded_domain = domain
 
-# --- Generation wrapper: integrates RAG, ephemeral docs, and proxy/local generation ---
+# --- Generation wrapper (same behavior) ---
 def _call_generation(mode: str, user_inputs: Dict[str, Any], use_rag: bool = True, k: int = TOP_K):
-    """
-    Unified generation entrypoint.
-    Behavior:
-    - If PROXY_URL is set, call proxy with ephemeral_docs included if selected.
-    - Else attempt to use local_generate_content if available (which may accept use_rag and vector_store).
-    - If local generate does not accept vector_store, try a best-effort approach: retrieve demo snippets locally and append to user_inputs as 'rag_context'.
-    - Always populate st.session_state.provenance with top-k demo snippets used (if any).
-    """
     provenance = []
     ephemeral_text = None
     if st.session_state.include_ephemeral_in_prompt and st.session_state.ephemeral_uploads:
-        # join ephemeral uploads into a single string (capped)
         parts = []
         for u in st.session_state.ephemeral_uploads:
             txt = u.get("text","")
@@ -327,27 +284,19 @@ def _call_generation(mode: str, user_inputs: Dict[str, Any], use_rag: bool = Tru
             parts.append(f"{u.get('title','uploaded_doc')}:\n{txt}")
         ephemeral_text = "\n\n".join(parts)
 
-    # If proxy present, delegate (proxy is expected to support ephemeral_docs arg)
     if PROXY_URL:
         resp = _proxy_generate(mode=mode, user_inputs=user_inputs, use_rag=use_rag, k=k, ephemeral_docs=ephemeral_text)
-        # Extract provenance if present
         st.session_state.provenance = resp.get("metadata", {}).get("rag_context", []) if isinstance(resp, dict) else []
         return resp
 
-    # Try local generation usage
-    # Preferred path: local_generate_content supports use_rag and vector_store args.
     if LOCAL_GENERATE_AVAILABLE:
         try:
-            # Try to call with vector_store if signature supports it
             try:
-                # new-style: generate_content(mode=..., user_inputs=..., use_rag=..., vector_store=..., k=..., ephemeral_docs=...)
                 resp = local_generate_content(mode=mode, user_inputs=user_inputs, use_rag=use_rag, vector_store=st.session_state.vector_store, k=k, ephemeral_docs=ephemeral_text)
-                # Try to get provenance from resp
                 if isinstance(resp, dict):
                     st.session_state.provenance = resp.get("metadata", {}).get("rag_context", []) or []
                 return resp
             except TypeError:
-                # Older signature fallback: generate_content(api_key, data, mode)
                 try:
                     resp = local_generate_content(None, user_inputs, mode)
                     st.session_state.provenance = []
@@ -356,14 +305,12 @@ def _call_generation(mode: str, user_inputs: Dict[str, Any], use_rag: bool = Tru
                     return {"error": f"local_generate_content_fallback_failed: {e}"}
         except Exception as e:
             return {"error": f"local_generate_failed: {e}"}
-    # No proxy and no local generator -> emulate RAG by retrieving top-k demo snippets and return a placeholder response
-    # Retrieve demo snippets from session vector store (if available)
+
     provenance = []
     if st.session_state.vector_store and use_rag:
         try:
-            query_text = " ".join([str(v) for v in user_inputs.values()][:8])  # short query
+            query_text = " ".join([str(v) for v in user_inputs.values()][:8])
             search_results = st.session_state.vector_store.similarity_search(query_text, k=k)
-            # normalize results into list of dicts: {"text":..., "meta": {...}, "score": ...}
             normalized = []
             for item in search_results:
                 if isinstance(item, tuple) and len(item) == 3:
@@ -384,7 +331,6 @@ def _call_generation(mode: str, user_inputs: Dict[str, Any], use_rag: bool = Tru
             st.session_state.provenance = provenance
         except Exception:
             st.session_state.provenance = []
-    # Build a very basic placeholder "generated" object using inputs and provenance to help the UI continue functioning
     placeholder_text = "Generated output (placeholder)."
     if st.session_state.provenance:
         placeholder_text += "\n\nGrounding snippets:\n"
@@ -396,20 +342,20 @@ def _call_generation(mode: str, user_inputs: Dict[str, Any], use_rag: bool = Tru
         placeholder_text += "\n\nEphemeral user documents included in prompt."
     return {"ok": True, "mode": mode, "raw_text": placeholder_text, "parsed": None, "metadata": {"rag_context": st.session_state.provenance}}
 
-# --- UI: small CSS polish ---
+# --- UI: CSS ---
 st.markdown("""
 <style>
 html, body, [class*="st-"] { font-family: Inter, Roboto, sans-serif; }
 .stDownloadButton>button { background-color:#216d33; color:white; border-radius:8px; }
+.sample-modal { position: relative; background: #ffffff; padding: 16px; border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
 .small-muted { color: #6b6b6b; font-size: 0.9rem; }
-.provenance-box { background:#0b1220; padding:12px; border-radius:8px; color: #e6eef8; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- UI pages ---
+# --- UI pages and helpers ---
 def render_header():
-    st.title("A/B Test PRD Generator — Domain-grounded Demo")
-    st.caption("Demo corpus is read-only. Uploaded docs remain ephemeral and never alter the demo corpus.")
+    st.title("A/B Test PRD Generator — Domain + Upload Options")
+    st.caption("Demo PRDs are read-only. Uploaded documents are ephemeral and will not be added to the demo corpus unless explicitly included in the prompt for this session.")
 
 def render_topbar():
     cols = st.columns([1,3,1])
@@ -421,7 +367,6 @@ def render_topbar():
     with cols[2]:
         if st.button("Reset Session"):
             for k in list(st.session_state.keys()):
-                # careful reset: keep static secrets but clear session-scoped items
                 if k not in ("demo_domain", "seeded_domain"):
                     try:
                         del st.session_state[k]
@@ -431,29 +376,57 @@ def render_topbar():
             st.experimental_rerun()
 
 def render_intro_page():
-    st.header("Step 1 — Basic context")
-    st.info("Choose a PRD domain. The selected domain's read-only demo PRDs will ground generation for this session.")
+    st.header("Step 1 — Basic context & RAG source selection")
 
-    # Domain selector (seeding happens when domain changes)
-    domain = st.selectbox("PRD domain", DOMAINS, index=DOMAINS.index(st.session_state.demo_domain) if st.session_state.demo_domain in DOMAINS else 0, help="Demo PRDs are read-only examples the assistant will use for grounding.")
+    st.markdown("**Choose which knowledge source the assistant should use for grounding:**")
+    choice = st.radio("RAG source", options=[
+        "Seeded demo PRDs (recommended — read-only, deterministic)",
+        "Upload / Paste my documents (advanced — ephemeral only)"
+    ], index=0 if st.session_state.demo_source_choice == "seeded" else 1, help="Seeded demo PRDs are curated, read-only examples. Uploads are ephemeral and won't alter the demo corpus.")
+    st.session_state.demo_source_choice = "seeded" if choice.startswith("Seeded") else "upload"
+
+    st.write("---")
+    if st.session_state.demo_source_choice == "seeded":
+        st.info("Seeded demo PRDs are curated examples you cannot edit. They provide reliable grounding and reproducible outputs for demos.")
+    else:
+        st.info("Upload/Paste flow: your uploaded files are used only in this session and are ephemeral. They are never added to the read-only demo corpus.")
+
+    st.write("---")
+    domain = st.selectbox("PRD domain", DOMAINS, index=DOMAINS.index(st.session_state.demo_domain) if st.session_state.demo_domain in DOMAINS else 0, help="Select domain to seed demo PRDs from.")
     st.session_state.demo_domain = domain
 
-    # Seed demo PRDs into session vector store if domain changed or not seeded
-    seed_session_vector_store_for_domain(domain)
+    # Seed demo PRDs if seeded path selected
+    if st.session_state.demo_source_choice == "seeded":
+        seed_session_vector_store_for_domain(domain)
 
-    # show small summary of demo PRDs available
+    # show sample modal trigger and info
     demo_docs = _load_demo_prds()
     domain_docs = [d for d in demo_docs if d.get("domain") == domain]
-    st.markdown(f"**Demo PRDs available for {domain}:** {len(domain_docs)} (read-only)")
-    if len(domain_docs) > 0:
-        if st.button("View sample demo PRDs"):
+    st.markdown(f"**Demo PRDs available for {domain}:** {len(domain_docs)}")
+    col_a, col_b = st.columns([1,1])
+    with col_a:
+        if domain_docs and st.button("View sample demo PRDs"):
+            st.session_state.show_sample_modal = True
+    with col_b:
+        st.markdown("**Need to use your docs?** Choose the *Upload / Paste* option above. Uploaded files are ephemeral and will not be added to the demo corpus.")
+
+    # Sample modal-like panel
+    if st.session_state.show_sample_modal:
+        # modal container
+        container = st.container()
+        with container:
+            st.markdown("### Sample demo PRDs (read-only)")
+            # Close button
+            if st.button("Close sample PRDs"):
+                st.session_state.show_sample_modal = False
             for d in domain_docs[:7]:
                 st.subheader(d.get("title"))
                 if d.get("business_context"):
                     st.markdown(f"*{d.get('business_context')}*")
                 ps = d.get("problem_statement") or d.get("prd_sections", {}).get("Problem_Statement", "")
                 if ps:
-                    st.markdown(f"**Problem:** {ps[:400]}")
+                    st.markdown(f"**Problem:** {ps[:500]}")
+                st.markdown("---")
 
     st.write("---")
     st.subheader("Experiment Context")
@@ -472,9 +445,9 @@ def render_intro_page():
         st.text_area("Target User Persona (optional)", key="intro_user_persona")
         st.text_area("App Description (optional)", key="intro_app_description")
 
-        st.write("Ephemeral user uploads")
-        st.markdown("You may upload or paste PRDs for this session only. They will **not** be added to the demo corpus or persist across sessions.")
-        uploaded = st.file_uploader("Upload PRD files (optional, .json/.txt). These are ephemeral and will not affect the demo corpus.", accept_multiple_files=True, type=["json","txt"])
+        st.write("Ephemeral user uploads (only for Upload/Paste flow)")
+        st.markdown("Supported file types: .json, .txt, .pdf, .docx, .doc. Uploaded files are ephemeral for this session only.")
+        uploaded = st.file_uploader("Upload PRD files (optional)", accept_multiple_files=True, type=["json","txt","pdf","docx","doc"])
         pasted = st.text_area("Or paste PRD text here (optional)", key="ephemeral_paste", height=120)
         consent = st.checkbox("I confirm I have rights to use these documents for temporary session-only grounding (ephemeral).", value=False, key="ephemeral_consent")
         include_in_prompt = st.checkbox("Include my ephemeral uploads in the prompt (optional)", value=False, key="include_ephemeral")
@@ -482,24 +455,49 @@ def render_intro_page():
 
         submitted = st.form_submit_button("Generate Hypotheses")
         if submitted:
-            # process ephemeral uploads into session.ephemeral_uploads
             st.session_state.ephemeral_uploads = []
-            if uploaded:
-                for f in uploaded:
-                    try:
-                        content = f.read().decode("utf-8")
-                    except Exception:
+            # Process uploads only when user chose upload flow
+            if st.session_state.demo_source_choice == "upload":
+                if uploaded:
+                    for f in uploaded:
                         try:
-                            content = f.read().decode("latin-1")
+                            if f.type == "application/pdf":
+                                # store raw bytes; don't attempt heavy parsing
+                                content = f.read()
+                                preview = f"{f.name} (PDF, {len(content)} bytes)"
+                                txt = f"[PDF: {f.name} — stored as bytes; not text-extracted]"
+                                st.session_state.ephemeral_uploads.append({"title": getattr(f, "name", "upload"), "text": txt, "raw_bytes": content})
+                            elif f.name.lower().endswith((".docx", ".doc")):
+                                # store bytes, indicate type
+                                content = f.read()
+                                txt = f"[Word doc: {f.name} — stored as bytes; not text-extracted]"
+                                st.session_state.ephemeral_uploads.append({"title": getattr(f, "name", "upload"), "text": txt, "raw_bytes": content})
+                            else:
+                                try:
+                                    content = f.read().decode("utf-8")
+                                except Exception:
+                                    try:
+                                        content = f.read().decode("latin-1")
+                                    except Exception:
+                                        content = ""
+                                st.session_state.ephemeral_uploads.append({"title": getattr(f, "name", "upload"), "text": content})
                         except Exception:
-                            content = ""
-                    st.session_state.ephemeral_uploads.append({"title": getattr(f, "name", "upload"), "text": content})
-            if pasted and pasted.strip():
-                st.session_state.ephemeral_uploads.append({"title": "pasted_doc", "text": pasted})
-            if st.session_state.ephemeral_uploads and not consent:
-                st.error("You must confirm ownership/permission to use uploaded docs for ephemeral session grounding.")
-                return
-            # store intro data
+                            st.session_state.ephemeral_uploads.append({"title": getattr(f, "name", "upload"), "text": ""})
+                if pasted and pasted.strip():
+                    st.session_state.ephemeral_uploads.append({"title": "pasted_doc", "text": pasted})
+                if st.session_state.ephemeral_uploads and not consent:
+                    st.error("You must confirm ownership/permission to use uploaded docs for ephemeral session grounding.")
+                    return
+            else:
+                # seeded flow: ignore any uploaded files but accept pasted for notes (not indexed)
+                if uploaded or pasted:
+                    st.warning("You selected Seeded demo PRDs. Uploaded files will not be indexed. To use uploaded docs, switch to Upload/Paste flow.")
+                    # still store pasted as ephemeral notes (but not used unless user switches)
+                    if pasted and pasted.strip():
+                        st.session_state.ephemeral_uploads = [{"title":"pasted_note","text":pasted}]
+                    else:
+                        st.session_state.ephemeral_uploads = []
+
             intro = {
                 "business_goal": st.session_state.intro_business_goal,
                 "key_metric": st.session_state.intro_key_metric,
@@ -511,11 +509,14 @@ def render_intro_page():
                 "product_type": st.session_state.intro_product_type,
                 "user_persona": st.session_state.intro_user_persona,
                 "app_description": st.session_state.intro_app_description,
-                "domain": st.session_state.demo_domain
+                "domain": st.session_state.demo_domain,
+                "rag_source": st.session_state.demo_source_choice
             }
             st.session_state.prd_data["intro_data"] = intro
 
-            # call generation for hypotheses
+            if st.session_state.demo_source_choice == "seeded":
+                seed_session_vector_store_for_domain(st.session_state.demo_domain)
+
             with st.spinner("Generating hypotheses..."):
                 resp = _call_generation(mode="hypotheses", user_inputs=intro, use_rag=st.session_state.use_rag, k=TOP_K)
             if isinstance(resp, dict) and resp.get("error"):
@@ -523,7 +524,6 @@ def render_intro_page():
                 if resp.get("raw_text"):
                     st.code(resp.get("raw_text")[:4000])
             else:
-                # normalize into st.session_state.hypotheses
                 parsed = resp.get("parsed") if isinstance(resp, dict) else None
                 if parsed:
                     st.session_state.hypotheses = parsed
@@ -539,7 +539,6 @@ def render_intro_page():
 def render_hypothesis_page():
     st.header("Step 2 — Hypotheses")
     st.info("Select a suggested hypothesis or write your own to enrich it.")
-
     st.text_area("Custom Hypothesis (optional)", key="custom_hypothesis_input", height=120)
     if st.button("Enrich Custom Hypothesis"):
         custom = st.session_state.get("custom_hypothesis_input","").strip()
@@ -579,7 +578,6 @@ def render_hypothesis_page():
 
 def render_prd_page():
     st.header("Step 3 — PRD Draft")
-    # If prd_sections empty, generate
     if not st.session_state.prd_data.get("prd_sections"):
         with st.spinner("Drafting PRD sections..."):
             context = {**st.session_state.prd_data.get("intro_data", {}), **({"hypothesis": st.session_state.prd_data.get("hypothesis")} or {})}
@@ -623,7 +621,6 @@ def render_calculations_page():
     dau = intro.get("dau", 10000)
     current = intro.get("current_value", 50.0)
     metric_type = intro.get("metric_type", "Proportion")
-
     st.markdown(f"**Metric:** {intro.get('key_metric','N/A')} ({metric_type})")
     st.number_input("Confidence (%)", min_value=50, max_value=99, value=95, key="calc_confidence")
     st.number_input("Power (%)", min_value=50, max_value=99, value=80, key="calc_power")
@@ -653,7 +650,6 @@ def render_calculations_page():
 def render_review_page():
     st.header("Step 5 — Review & Export")
     prd = st.session_state.prd_data
-
     st.subheader("Executive summary")
     st.markdown(f"**Business Goal:** {prd.get('intro_data',{}).get('business_goal','')}")
     st.markdown(f"**Hypothesis:** {prd.get('hypothesis')}")
@@ -661,17 +657,14 @@ def render_review_page():
     for k,v in prd.get("prd_sections", {}).items():
         st.markdown(f"### {k.replace('_',' ').title()}")
         st.markdown(format_content_for_display(v))
-
     st.subheader("Calculations")
     st.write(prd.get("calculations", {}))
-
     st.subheader("Risks")
     for i, r in enumerate(prd.get("risks", [])):
         st.markdown(f"- **Risk:** {r.get('risk')} — **Mitigation:** {r.get('mitigation')}")
-
     st.write("---")
     st.subheader("Context & Provenance")
-    st.markdown("The assistant used the following demo snippets from the selected domain (read-only):")
+    st.markdown("Demo snippets (read-only) used for grounding:")
     prov = st.session_state.get("provenance", [])
     if prov:
         for i, p in enumerate(prov[:TOP_K]):
@@ -686,7 +679,6 @@ def render_review_page():
         for u in st.session_state.ephemeral_uploads:
             st.markdown(f"- {u.get('title')}: {u.get('text')[:300]}...")
 
-    # Generate risks via LLM
     if st.button("Generate Risks"):
         payload = {**prd.get("intro_data", {}), "hypothesis": prd.get("hypothesis")}
         with st.spinner("Generating risks..."):
@@ -706,7 +698,6 @@ def render_review_page():
     pdf_bytes = create_pdf(prd)
     st.download_button("Download PRD as PDF", pdf_bytes, file_name="PRD.pdf", mime="application/pdf")
 
-    # Save: local persistence or no-op if missing
     st.write("---")
     if PERSISTENCE_AVAILABLE:
         if st.button("Save PRD to DB"):
@@ -718,7 +709,8 @@ def render_review_page():
                     "calculations": prd.get("calculations", {}),
                     "risks": prd.get("risks", []),
                     "saved_with_rag": st.session_state.use_rag,
-                    "seeded_domain": st.session_state.seeded_domain
+                    "seeded_domain": st.session_state.seeded_domain,
+                    "rag_source": st.session_state.demo_source_choice
                 }
                 pid = persistence_save_prd(save_payload, title=save_payload["intro_data"].get("business_goal"), actor="streamlit_user")
                 st.session_state.saved_prd_info = {"id": pid, "title": save_payload["intro_data"].get("business_goal","")}
@@ -728,14 +720,13 @@ def render_review_page():
     else:
         st.info("Persistence not available. Add utils/persistence.py to enable saving.")
 
-# --- Helper functions ---
 def format_content_for_display(content):
     if isinstance(content, list):
         return "\n".join([f"- {item}" for item in content])
     else:
         return str(content)
 
-# --- Main render logic ---
+# --- Main render ---
 render_header()
 render_topbar()
 
@@ -754,10 +745,9 @@ if st.session_state.scroll_to_top:
     scroll_to_top()
     st.session_state.scroll_to_top = False
 
-# optional: show seeded domain info and ephemeral uploads count in footer
 with st.expander("Session info (for demo)"):
     st.markdown(f"- Seeded demo domain: **{st.session_state.seeded_domain}**")
     st.markdown(f"- Ephemeral uploads in session: **{len(st.session_state.ephemeral_uploads)}**")
     st.markdown(f"- Include ephemeral uploads in prompt: **{st.session_state.include_ephemeral_in_prompt}**")
     st.markdown(f"- RAG enabled: **{st.session_state.use_rag}**")
-
+    st.markdown(f"- RAG source choice: **{st.session_state.demo_source_choice}**")
